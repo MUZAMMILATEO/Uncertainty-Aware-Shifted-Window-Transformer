@@ -3,7 +3,7 @@
 **Authors:** Nitish Kumar Mahala, Muzammil Khan\*, Pushpendra Kumar
 
 ## Architectures  
-<div align="center">
+<div style="display: flex; justify-content: center;">
 <table>
     <tr>
         <td><img src="fig/fig01.png" alt="Figure 1" width="95%"></td>
