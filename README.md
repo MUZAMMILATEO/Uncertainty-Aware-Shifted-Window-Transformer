@@ -19,3 +19,9 @@
 
 ## Download the Model
 The trained model can be downloaded from [Google Drive](https://drive.google.com/file/d/1GEQM-tcE_J8mMrOuj0LAgYVPcspAsvho/view?usp=drive_link).
+
+---
+
+## Contact
+For any questions or collaboration opportunities, reach out to:
+- **Muzammil Khan** (Corresponding Author) – [m.khan@utwente.nl](mailto:m.khan@utwente.nl)
