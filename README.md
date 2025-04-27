@@ -11,10 +11,9 @@
 ---
 
 ## 🎨 Table of Contents
-- 🔹 [🏗️ Model Architecture](#model-architecture)
-- 🔹 [🔍 Uncertainty Head](#uncertainty-head)
-- 🔹 [⬇️ Download](#download)
-- 🔹 [📬 Contact](#contact)
+- [🏗️ Model Architecture](#model-architecture)
+- [⬇️ Download](#download)
+- [📬 Contact](#contact)
 
 ---
 
