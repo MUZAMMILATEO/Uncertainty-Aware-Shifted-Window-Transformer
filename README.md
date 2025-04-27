@@ -18,7 +18,7 @@
 
 
 ## Download the Model
-The trained model can be downloaded from [Google Drive](https://drive.google.com/file/d/1GEQM-tcE_J8mMrOuj0LAgYVPcspAsvho/view?usp=drive_link).
+The trained model can be downloaded from [Google Drive](https://drive.google.com/file/d/1rI2omNOWcsuCL21VXcB9DRJoZNHLM88g/view?usp=drive_link).
 
 ---
 
