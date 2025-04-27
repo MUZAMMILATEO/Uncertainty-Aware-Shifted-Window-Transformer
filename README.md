@@ -1,8 +1,24 @@
-# Uncertainty Aware Shifted Window Transformer for Smoke Identification
+# 🌀 Uncertainty-Aware Shifted Window Transformer for Smoke Identification
 
-**Authors:** Nitish Kumar Mahala, Muzammil Khan\*, Pushpendra Kumar
+### **Authors**
+🔷 **Nitish Kumar Mahala**, **Muzammil Khan***, **Pushpendra Kumar**
 
-## Architectures  
+*✉️ Correspondence: [m.khan@utwente.nl](mailto:m.khan@utwente.nl)
+
+## 📖 Abstract
+> Available soon
+
+---
+
+## 🎨 Table of Contents
+- 🔹 [🏗️ Model Architecture](#model-architecture)
+- 🔹 [🔍 Uncertainty Head](#uncertainty-head)
+- 🔹 [⬇️ Download](#download)
+- 🔹 [📬 Contact](#contact)
+
+---
+
+## 🏗️ Model Architecture
 <div style="display: flex; justify-content: center;">
 <table>
     <tr>
@@ -17,11 +33,17 @@
 </div>
 
 
-## Download the Model
-The trained model can be downloaded from [Google Drive](https://drive.google.com/file/d/1rI2omNOWcsuCL21VXcB9DRJoZNHLM88g/view?usp=drive_link).
+## ⬇️ Download Model Weights
+> **Pretrained Model Weights:**
+> - [⬇️ Google Drive](https://drive.google.com/file/d/1rI2omNOWcsuCL21VXcB9DRJoZNHLM88g/view?usp=drive_link)
 
 ---
 
-## Contact
-For any questions or collaboration opportunities, reach out to:
-- **Muzammil Khan** (Corresponding Author) – [m.khan@utwente.nl](mailto:m.khan@utwente.nl)
+## 📬 Contact
+
+Feel free to reach out for questions, feedback, or collaboration:
+
+- ✉️ **Muzammil Khan** (Corresponding Author)
+  - m.khan@utwente.nl
+
+---
