@@ -15,6 +15,7 @@ jchen245@jhmi.edu
 Johns Hopkins University
 '''
 
+import random
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint as checkpoint
@@ -25,6 +26,7 @@ import numpy as np
 import models.configs_UAST_Net as configs
 from torch.nn.functional import leaky_relu
 from torch.nn import init
+import torchvision.transforms.functional as TF
 
 
 
@@ -734,12 +736,12 @@ class RegistrationHead(nn.Module):
                            if upsampling > 1 else None)
         
         self.num_lev = num_lev
+        self.pyramid_dropout = nn.Dropout2d(0.0)
         
         # Instantiate the classification score module.
         # Note: We assume that the feature maps in the pyramid have 'in_channels' channels.
         self.class_mean_pred = ClassScore(in_channels, hidden_dim=2048, dropout_rate=0.5, num_classes=1)
         self.class_std_pred = ClassScore(in_channels, hidden_dim=2048, dropout_rate=0.5, num_classes=1)
-        self.class_score = ClassScore(in_channels, hidden_dim=2048, dropout_rate=0.5, num_classes=1)
 
     def forward(self, x, y, val):
         # Optionally, you might want to apply self.conv2d or self.upsampling to x first.
@@ -785,26 +787,25 @@ class RegistrationHead(nn.Module):
             
             # Apply the classification head to each pyramid level.
             # This returns a list of classification scores (one per level)
-            class_scores_x = [self.class_score(level) for level in pyramid_x]
-            class_scores_y = [self.class_score(level) for level in pyramid_y]
+            class_scores_x = [self.class_mean_pred(level)*0.75 for level in pyramid_x]
+            class_scores_y = [self.class_mean_pred(level)*0.25 for level in pyramid_y]
+            
+            class_scores_tot = [score_x + score_y for score_x, score_y in zip(class_scores_x, class_scores_y)]
+
             
             # Stack the scores into a tensor of shape: [num_levels, batch_size, 1]
-            stacked_scores_x = torch.stack(class_scores_x, dim=0)
-            stacked_scores_y = torch.stack(class_scores_y, dim=0)
-        
-            # Concatenate along the pyramid level dimension (dim=0)
-            stacked_scores_combined = torch.cat([stacked_scores_x, stacked_scores_y], dim=0)
+            class_scores_tot = torch.stack(class_scores_tot, dim=0)
 
             # Compute the mean over the combined pyramid dimension
-            mean_scores = torch.mean(stacked_scores_combined, dim=0)  # Shape: [batch_size, 1]
+            mean_scores = torch.mean(class_scores_tot, dim=0)  # Shape: [batch_size, 1]
 
             # Compute the standard deviation over the combined pyramid dimension
-            std_scores = torch.std(stacked_scores_combined, dim=0)    # Shape: [batch_size, 1]
+            std_scores = torch.std(class_scores_tot, dim=0)    # Shape: [batch_size, 1]
         
             # Optionally, if you need probabilities instead of logits, apply sigmoid:
             # prob_scores = torch.sigmoid(mean_scores)
         
-            return mean_pred, std_pred, mean_scores, std_scores
+            return torch.sigmoid(mean_pred), std_pred, torch.sigmoid(mean_scores), std_scores
         else:
             mean_pred = self.conv2d_mean(x)
             mean_pred = self.class_mean_pred(mean_pred)
@@ -826,24 +827,9 @@ class RegistrationHead(nn.Module):
         upsampled maps, or a combination of both.
         """
         pyramid = [x]
+        # Define dropout here or as a module-level attribute (recommended)
         for i in range(self.num_lev):  # Pyramid levels starting at 0
-            # Compute scale factors: downsampling factor is the inverse of upsampling.
-            scale_factor_d = 1 / (2 ** i)
-            scale_factor_u = 2 ** i
-            
-            # Downsample the feature map
-            downsampled_x = nnf.interpolate(x, scale_factor=scale_factor_d, mode='bilinear', 
-                                          align_corners=False)
-            # Check if the downsampled size is valid (non-zero spatial dimensions)
-            if downsampled_x.shape[2] == 0 or downsampled_x.shape[3] == 0:
-                break
-            
-            # Upsample the feature map
-            upsampled_x = nnf.interpolate(x, scale_factor=scale_factor_u, mode='bilinear', 
-                                        align_corners=False)
-            
-            # Append one or both of the scaled versions to the pyramid.
-            # Here we append the upsampled version as an example.
+            upsampled_x = self.pyramid_dropout(x)
             pyramid.append(upsampled_x)
             
         return pyramid
@@ -957,110 +943,99 @@ class UASTNet(nn.Module):
         self.c2 = Conv2dReLU(3, config.reg_head_chan, 3, 1, use_batchnorm=False)
         self.reg_head = RegistrationHead(in_channels=config.reg_head_chan, out_channels=16, kernel_size=3)
         self.avg_pool = nn.AvgPool2d(3, stride=2, padding=1)
+        self.class_mean_pred = ClassScore(in_channels=config.reg_head_chan, hidden_dim=2048, dropout_rate=0.5, num_classes=1)
+        self.class_std_pred = ClassScore(in_channels=config.reg_head_chan, hidden_dim=2048, dropout_rate=0.5, num_classes=1)
+        self.class_score = ClassScore(in_channels=config.reg_head_chan, hidden_dim=2048, dropout_rate=0.5, num_classes=1)
 
         self._dropout_T = 1000 #25
         self._dropout_p = 0.5
+        self.mc_samples = 5
+    def freeze_except_std(self):
+        """
+        Freeze all model parameters except for those in the class_std_pred module.
+        """
+        for param in self.parameters():
+            param.requires_grad = False
+        for param in self.class_std_pred.parameters():
+            param.requires_grad = True
 
-    def forward(self, x, disp=None,  val=True, mc_dropout=False, test=False):
-        alpha = 0.5
-        beta  = 0.5
-        source = x[:, 0:3, :, :]
-        colorSeg = x[:, 3:6, :, :]
-        if disp is not None:
-            dispSrc = disp[:, 0:1, :, :]
+    def random_transform(self, input_tensor):
+        """
+        Apply a random transformation (horizontal flip and small rotation) to the input tensor.
+        The same random seed is used so that the same transformation can be applied to both inputs.
+        """
+        do_flip = (random.random() < 0.5)
+        angle = random.uniform(-15, 15)
+        if do_flip:
+            input_tensor = TF.hflip(input_tensor)
+        input_tensor = TF.rotate(input_tensor, angle)
+        return input_tensor
+
+    def process_branch(self, branch_input):
+        """
+        Process a single 3-channel input (either source or colorSeg) through the network layers.
+        This includes optional conv-skip connections and the transformer followed by upsampling.
+        """
         if self.if_convskip:
-            x_s0 = source.clone()
-            x_s1 = self.avg_pool(source)
+            x_s0 = branch_input.clone()
+            x_s1 = self.avg_pool(branch_input)
             f4 = self.c1(x_s1)
-            if f4.requires_grad:
-                f4.register_hook(lambda grad: grad * alpha)
-            f4 = nnf.dropout3d(f4, self._dropout_p, training=self.training)
+            f4 = nnf.dropout3d(f4, p=self._dropout_p, training=self.training)
             f5 = self.c2(x_s0)
-            if f5.requires_grad:
-                f5.register_hook(lambda grad: grad * alpha)
-            f5 = nnf.dropout3d(f5, self._dropout_p, training=self.training)
+            f5 = nnf.dropout3d(f5, p=self._dropout_p, training=self.training)
         else:
-            f4 = None
-            f5 = None
+            f4, f5 = None, None
 
-        out_feats = self.transformer(source)
-
+        out_feats = self.transformer(branch_input)
         if self.if_transskip:
             f1 = out_feats[-2]
             f2 = out_feats[-3]
             f3 = out_feats[-4]
         else:
-            f1 = None
-            f2 = None
-            f3 = None
-        source = self.up0(out_feats[-1], f1)
-        if source.requires_grad:
-            source.register_hook(lambda grad: grad * alpha)
-        source = self.up1(source, f2)
-        if source.requires_grad:
-            source.register_hook(lambda grad: grad * alpha)
-        source = self.up2(source, f3)
-        if source.requires_grad:
-            source.register_hook(lambda grad: grad * alpha)
-        source = self.up3(source, f4)
-        if source.requires_grad:
-            source.register_hook(lambda grad: grad * alpha)
-        source1 = self.up4(source, f5)
-        if source1.requires_grad:
-            source1.register_hook(lambda grad: grad * alpha)
-        
-        # print(f"The shape of source in registration head is: {source1.shape}")
-        
-        
-        if self.if_convskip:
-            x_s0_2 = colorSeg.clone()
-            x_s1_2 = self.avg_pool(colorSeg)
-            f4_2 = self.c1(x_s1_2)
-            if f4_2.requires_grad:
-                f4_2.register_hook(lambda grad: grad * beta)
-            f4_2 = nnf.dropout3d(f4_2, self._dropout_p, training=self.training)
-            f5_2 = self.c2(x_s0_2)
-            if f5_2.requires_grad:
-                f5_2.register_hook(lambda grad: grad * beta)
-            f5_2 = nnf.dropout3d(f5_2, self._dropout_p, training=self.training)
-        else:
-            f4_2 = None
-            f5_2 = None
+            f1 = f2 = f3 = None
 
-        out_feats_2 = self.transformer(colorSeg)
+        out = self.up0(out_feats[-1], f1)
+        out = self.up1(out, f2)
+        out = self.up2(out, f3)
+        out = self.up3(out, f4)
+        final_out = self.up4(out, f5)
+        return final_out
 
-        if self.if_transskip:
-            f1_2 = out_feats_2[-2]
-            f2_2 = out_feats_2[-3]
-            f3_2 = out_feats_2[-4]
-        else:
-            f1_2 = None
-            f2_2 = None
-            f3_2 = None
-        colorSeg_2 = self.up0(out_feats_2[-1], f1_2)
-        if colorSeg_2.requires_grad:
-            colorSeg_2.register_hook(lambda grad: grad * beta)
-        colorSeg_2 = self.up1(colorSeg_2, f2_2)
-        if colorSeg_2.requires_grad:
-            colorSeg_2.register_hook(lambda grad: grad * beta)
-        colorSeg_2 = self.up2(colorSeg_2, f3_2)
-        if colorSeg_2.requires_grad:
-            colorSeg_2.register_hook(lambda grad: grad * beta)
-        colorSeg_2 = self.up3(colorSeg_2, f4_2)
-        if colorSeg_2.requires_grad:
-            colorSeg_2.register_hook(lambda grad: grad * beta)
-        colorSeg_21 = self.up4(colorSeg_2, f5_2)
-        if colorSeg_21.requires_grad:
-            colorSeg_21.register_hook(lambda grad: grad * beta)
-        
-        # print(f"The shape of segmented color map in registration head is: {colorSeg_21.shape}")
-        
-        if test == False:
-            mean_pred, std_pred, mean_scores, var_scores = self.reg_head(source1, colorSeg_21, val)
-            return mean_pred, std_pred, mean_scores, var_scores
-        else:
-            mean_pred, std_pred, _, _ = self.reg_head(source1, colorSeg_21, val=False)
-            return mean_pred, std_pred, None, None
+    def forward(self, x, disp=None, val=True, mc_dropout=False, test=False):
+        # Split the 6-channel input into two 3-channel branches.
+        source = x[:, 0:3, :, :]
+        colorSeg = x[:, 3:6, :, :]
+
+        if test:
+            proc_source = self.process_branch(source)
+            proc_color = self.process_branch(colorSeg)
+            sample_logits = 0.75 * self.class_mean_pred(proc_source) + 0.25 * self.class_mean_pred(proc_color)
+            mean_pred = 0.75 * self.class_score(proc_source) + 0.25 * self.class_score(proc_color)
+            std_pred = 0.75 * self.class_std_pred(proc_source) + 0.25 * self.class_std_pred(proc_color)
+            return mean_pred, std_pred, sample_logits, None
+
+        # Monte Carlo (MC) dropout based ensembling
+        ensemble_logits = []
+        for i in range(self.mc_samples):
+            seed = random.randint(0, 10000)
+            random.seed(seed)
+            ts_source = self.random_transform(source.clone())
+            random.seed(seed)
+            ts_color = self.random_transform(colorSeg.clone())
+            proc_ts_source = self.process_branch(ts_source)
+            proc_ts_color = self.process_branch(ts_color)
+            sample_logits = 0.75 * self.class_mean_pred(proc_ts_source) + 0.25 * self.class_mean_pred(proc_ts_color)
+            ensemble_logits.append(sample_logits)
+        ensemble_tensor = torch.stack(ensemble_logits, dim=0)  # shape: [mc_samples, batch_size, 1]
+        ensemble_mean = torch.mean(ensemble_tensor, dim=0)
+        ensemble_std = torch.std(ensemble_tensor, dim=0)
+
+        proc_source = self.process_branch(source)
+        proc_color = self.process_branch(colorSeg)
+        final_mean_pred = 0.75 * self.class_score(proc_source) + 0.25 * self.class_score(proc_color)
+        final_log_var_pred = 0.75 * self.class_std_pred(proc_source) + 0.25 * self.class_std_pred(proc_color)
+        return final_mean_pred, final_log_var_pred, ensemble_mean, ensemble_std
+
 CONFIGS = {
     'UASTNet': configs.get_2DUASTNet_config(),
 }
